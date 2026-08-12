@@ -1,0 +1,145 @@
+[
+  {
+    "head": "EXAMPLE_SINGLE_STEP_HEAD",
+    "body": [
+      {
+        "route": "application",
+        "key": "application",
+        "component": "ExampleFormStep",
+        "nextStep": null,
+        "isPreview": false,
+        "withoutLabel": true,
+        "type": "component",
+        "hideInEmployee": false,
+        "sectionHeading": "EXAMPLE_SINGLE_STEP_TITLE",
+        "payloadKey": "Applications",
+        "apiId": "example-single-step",
+        "texts": {
+          "header": "EXAMPLE_SINGLE_STEP_TITLE",
+          "submitBarLabel": "CS_COMMON_NEXT"
+        },
+        "form": [
+          {
+            "order": 0,
+            "type": "sectionHeader",
+            "key": "EXAMPLE_SECTION_BASIC",
+            "label": { "code": "EXAMPLE_SECTION_BASIC" }
+          },
+          {
+            "order": 1,
+            "key": "EXAMPLE_FULL_NAME",
+            "summaryLabel": "EXAMPLE_FULL_NAME",
+            "field": {
+              "code": "EXAMPLE_FULL_NAME",
+              "name": "fullName",
+              "type": "text",
+              "placeholder": "EXAMPLE_ENTER_FULL_NAME"
+            },
+            "validation": {
+              "required": true,
+              "minLength": 2,
+              "maxLength": 100
+            },
+            "messages": {
+              "error": "EXAMPLE_FULL_NAME_REQUIRED"
+            }
+          },
+          {
+            "order": 2,
+            "key": "EXAMPLE_EMAIL",
+            "summaryLabel": "EXAMPLE_EMAIL",
+            "field": {
+              "code": "EXAMPLE_EMAIL",
+              "name": "email",
+              "type": "text",
+              "placeholder": "EXAMPLE_ENTER_EMAIL"
+            },
+            "validation": {
+              "required": true,
+              "pattern": "^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$"
+            },
+            "messages": {
+              "error": "EXAMPLE_EMAIL_INVALID"
+            }
+          },
+          {
+            "order": 3,
+            "key": "EXAMPLE_CATEGORY",
+            "summaryLabel": "EXAMPLE_CATEGORY",
+            "field": {
+              "code": "EXAMPLE_CATEGORY",
+              "name": "category",
+              "type": "dropdown"
+            },
+            "options": [
+              { "code": "GENERAL", "name": "General enquiry", "i18nKey": "General enquiry" },
+              { "code": "SUPPORT", "name": "Support request", "i18nKey": "Support request" },
+              { "code": "FEEDBACK", "name": "Feedback", "i18nKey": "Feedback" }
+            ],
+            "validation": {
+              "required": true
+            },
+            "messages": {
+              "error": "EXAMPLE_CATEGORY_REQUIRED"
+            }
+          },
+          {
+            "order": 4,
+            "key": "EXAMPLE_DESCRIPTION",
+            "summaryLabel": "EXAMPLE_DESCRIPTION",
+            "field": {
+              "code": "EXAMPLE_DESCRIPTION",
+              "name": "description",
+              "type": "text",
+              "placeholder": "EXAMPLE_ENTER_DESCRIPTION"
+            },
+            "validation": {
+              "required": true,
+              "maxLength": 500
+            },
+            "messages": {
+              "error": "EXAMPLE_DESCRIPTION_REQUIRED"
+            }
+          },
+          {
+            "order": 5,
+            "key": "EXAMPLE_PREFERRED_DATE",
+            "summaryLabel": "EXAMPLE_PREFERRED_DATE",
+            "field": {
+              "code": "EXAMPLE_PREFERRED_DATE",
+              "name": "preferredDate",
+              "type": "date",
+              "minDate": "today"
+            },
+            "validation": {
+              "required": false
+            }
+          },
+          {
+            "order": 6,
+            "key": "EXAMPLE_ASSET_TYPE",
+            "field": {
+              "code": "EXAMPLE_ASSET_TYPE",
+              "name": "assetType",
+              "placeholder": "EXAMPLE_SELECT_ASSET_TYPE",
+              "type": "dropdown",
+              "dataSource": {
+                "type": "MDMS",
+                "moduleName": "ASSET",
+                "masterName": "assetParentCategory",
+                "filter": {
+                  "assetClassification": "IMMOVABLE"
+                }
+              }
+            },
+            "validation": {
+              "required": true,
+              "disabled": false,
+              "readOnly": false
+            }
+          }
+        ]
+      }
+    ]
+  }
+]

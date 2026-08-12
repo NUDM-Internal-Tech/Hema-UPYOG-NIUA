@@ -75,6 +75,31 @@ export const StoreService = {
       uiHomePage: uiHomePage
     };
 
+    /**
+     * Local-only / not-yet-deployed MDMS modules.
+     * If a code is in enabledModules but missing from tenant.citymodule (remote MDMS),
+     * inject it so routes like /upyog-ui/employee/multistepsform still mount.
+     * Remove entries once the matching citymodule is live in MDMS.
+     */
+    const LOCAL_FALLBACK_MODULES = [
+      {
+        module: "MultiStepsForm",
+        code: "MultiStepsForm",
+        active: true,
+        order: 99,
+        tenants: [],
+      },
+    ];
+    LOCAL_FALLBACK_MODULES.forEach((localMod) => {
+      if (!enabledModules?.includes(localMod.code)) return;
+      if (initData.modules?.some((m) => m.code === localMod.code)) return;
+      const tenants =
+        (localMod.tenants && localMod.tenants.length > 0
+          ? localMod.tenants
+          : initData.modules?.[0]?.tenants) || [];
+      initData.modules = [...(initData.modules || []), { ...localMod, tenants }];
+    });
+
   
     initData.selectedLanguage = Digit.SessionStorage.get("locale") || initData.languages[0].value;
 

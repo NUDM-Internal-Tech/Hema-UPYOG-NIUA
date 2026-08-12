@@ -81,6 +81,54 @@ const Home = (props) => {
       }
     );
 
+    if (linkData) {
+      linkData.OBPS = [
+        ...(linkData.OBPS || []),
+        {
+          id: 9999,
+          name: "OBPAS_V2",
+          url: "digit-ui-card",
+          displayName: "View applications by Citizen",
+          orderNumber: 6,
+          parentModule: "OBPS",
+          enabled: true,
+          serviceCode: "",
+          code: "",
+          path: "",
+          navigationURL: "/upyog-ui/citizen/multiStepsForm/home",
+          leftIcon: "OBPSIcon",
+          rightIcon: "",
+          queryParams: "",
+          sidebar: "digit-ui-links",
+          sidebarURL: "/digit-ui/citizen/obps-home"
+        }
+      ];
+    }
+
+    if (linkData) {
+      linkData.OBPS = [
+        ...(linkData.OBPS || []),
+        {
+          id: 9999,
+          name: "MultiStepsForm",
+          url: "digit-ui-card",
+          displayName: "MultiStepsForm",
+          orderNumber: 6,
+          parentModule: "MultiStepsForm",
+          enabled: true,
+          serviceCode: "",
+          code: "",
+          path: "",
+          navigationURL: "/upyog-ui/citizen/multiStepsForm",
+          leftIcon: "OBPSIcon",
+          rightIcon: "",
+          queryParams: "",
+          sidebar: "digit-ui-links",
+          sidebarURL: "/digit-ui/citizen/multiStepsForm-home"
+        }
+      ];
+    }
+
   const isMobile = window.Digit.Utils.browser.isMobile();
   const classname = Digit.Hooks.useRouteSubscription(pathname);
   const { t } = useTranslation();

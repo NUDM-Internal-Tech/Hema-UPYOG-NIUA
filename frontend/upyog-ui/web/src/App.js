@@ -63,6 +63,11 @@ import { PGRAIComponents, PGRAILinks, PGRAIModule } from "@upyog/upyog-ui-module
 import { ASSETV2Components, ASSETV2Links, ASSETV2Module } from "@nudmcdgnpm/upyog-ui-module-asset-v2";
 import { GISComponents, GISLinks, GISModule } from "@nudmcdgnpm/upyog-ui-module-gis";
 import { ESTComponents, ESTLinks, ESTModule } from "@nudmcdgnpm/upyog-ui-module-est";
+import {
+  MultiStepsFormComponents,
+  MultiStepsFormLinks,
+  MultiStepsFormModule,
+} from "@nudmcdgnpm/upyog-ui-module-multistepsform";
 import { initNDCComponents, NDCReducers } from "@nudmcdgnpm/upyog-ui-module-ndc";
 import { GCModule, GCComponents } from "@nudmcdgnpm/upyog-ui-module-gc";
 import { FinanceModule, FinanceComponents } from "@nudmcdgnpm/upyog-ui-module-finance";
@@ -111,6 +116,7 @@ const enabledModules = [
   "TP",
   "ASSETV2",
    "EST",
+  "MultiStepsForm",
   "GIS",
   "NDC",
   "GC",
@@ -163,6 +169,9 @@ window.Digit.ComponentRegistryService.setupRegistry({
     ESTModule,
     ESTLinks,
     ...ESTComponents,
+    MultiStepsFormModule,
+    MultiStepsFormLinks,
+    ...MultiStepsFormComponents,
     ...GCComponents,
     GCModule,
     FinanceModule,

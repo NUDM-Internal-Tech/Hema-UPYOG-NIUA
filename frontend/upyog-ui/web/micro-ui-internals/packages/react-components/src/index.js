@@ -284,6 +284,14 @@ export {
 export { default as useDynamicRouteConfig } from "./utilities/useDynamicRouteConfig";
 export { default as useMergedRouteConfig } from "./utilities/useMergedRouteConfig";
 export { default as useDynamicCheckSubmit } from "./utilities/useDynamicCheckSubmit";
+export { default as useDynamicWizard } from "./utilities/useDynamicWizard";
+export {
+  buildWizardSteps,
+  getWizardBasePath,
+  createWizardGoNext,
+  collectWizardFlatValues,
+  getWizardStepRoutes,
+} from "./utilities/wizardUtils";
 export { default as useIsMobile } from "./utilities/useIsMobile";
 export { default as useClientPagination } from "./utilities/useClientPagination";
 
