@@ -5,6 +5,7 @@ import { initLibraries } from "@upyog/digit-ui-libraries";
 If you want the npm published css to run here, then you have to add   import "@nudmcdgnpm/upyog-css/index.css" and comment out the import "@nudmcdgnpm/upyog-css/src/index.scss" */
 // import "@nudmcdgnpm/upyog-css/src/index.scss";
 import "@nudmcdgnpm/upyog-css/index.css";
+import "./styles/employee-module-cards.scss";
 import App from './App';
 
 initLibraries();
