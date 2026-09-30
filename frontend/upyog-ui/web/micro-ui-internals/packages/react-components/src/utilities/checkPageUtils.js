@@ -151,6 +151,7 @@ const LOCAL_ROUTE_FALLBACK_KEYS = [
   "draftButton",
   "searchLayout",
   "searchFormClassName",
+  "formGate",
 ];
 
 /**

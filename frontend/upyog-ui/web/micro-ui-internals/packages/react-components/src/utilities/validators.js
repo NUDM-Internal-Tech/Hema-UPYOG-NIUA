@@ -18,7 +18,7 @@
  * @see formUtils.isFieldVisible
  */
 
-import { flattenFormConfig, resolveBillingCycleMultiplier, toDate, isFieldVisible, optionCode } from "./formUtils";
+import { getFieldArrayName, resolveBillingCycleMultiplier, toDate, isFieldVisible, optionCode, toInputDate, resolveConfigDate, evaluateFormRule } from "./formUtils";
 
 /**
  * True when a field value is considered empty for required checks.
@@ -29,8 +29,24 @@ import { flattenFormConfig, resolveBillingCycleMultiplier, toDate, isFieldVisibl
  * @returns {boolean}
  */
 const isEmptyValue = (value, type) => {
-  if (type === "dropdown") return !value || !value.code;
+  if (type === "dropdown") return !value || !optionCode(value);
+  if (type === "radio") {
+    if (value && typeof value === "object") return !optionCode(value);
+    return value === undefined || value === null || String(value).trim() === "";
+  }
   return value === undefined || value === null || String(value).trim() === "";
+};
+
+/**
+ * Compare yyyy-MM-dd (or parseable) values as local calendar days.
+ * @returns {number|null} negative / 0 / positive, or null when either side is invalid
+ */
+const compareInputDates = (left, right) => {
+  const a = toInputDate(left);
+  const b = toInputDate(right);
+  if (!a || !b) return null;
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
 };
 
 /**
@@ -94,6 +110,99 @@ export const fieldRules = {
     const num = Number(String(value).replace(/,/g, "").trim());
     return Number.isFinite(num) && num >= 0 && num <= max;
   },
+
+  /**
+   * Date must be on/after field.minDate (or validation.minDate override).
+   * Empty values pass (use required). Spec uses resolveConfigDate shapes.
+   */
+  minDate: (value, { fieldConfig }) => {
+    if (!value) return true;
+    const spec =
+      fieldConfig.validation?.minDate === true ||
+      fieldConfig.validation?.minDate == null
+        ? fieldConfig.field?.minDate
+        : fieldConfig.validation.minDate;
+    const bound = resolveConfigDate(spec);
+    if (!bound) return true;
+    const cmp = compareInputDates(value, bound);
+    return cmp == null ? true : cmp >= 0;
+  },
+
+  /**
+   * Date must be on/before field.maxDate (or validation.maxDate override).
+   * Empty values pass (use required). Spec uses resolveConfigDate shapes.
+   */
+  maxDate: (value, { fieldConfig }) => {
+    if (!value) return true;
+    const spec =
+      fieldConfig.validation?.maxDate === true ||
+      fieldConfig.validation?.maxDate == null
+        ? fieldConfig.field?.maxDate
+        : fieldConfig.validation.maxDate;
+    const bound = resolveConfigDate(spec);
+    if (!bound) return true;
+    const cmp = compareInputDates(value, bound);
+    return cmp == null ? true : cmp <= 0;
+  },
+
+  /**
+   * Numeric value must be strictly greater than validation.gt (ATT: UOM > 0).
+   */
+  gt: (value, { fieldConfig }) => {
+    if (value === null || value === undefined || value === "") return true;
+    const threshold = Number(fieldConfig.validation?.gt);
+    if (!Number.isFinite(threshold)) return true;
+    const num = Number(String(value).replace(/,/g, "").trim());
+    return Number.isFinite(num) && num > threshold;
+  },
+
+  /**
+   * Numeric min — absolute number or `{ fromField: "otherField" }` on the same row/form.
+   */
+  min: (value, { fieldConfig, formData }) => {
+    if (value === null || value === undefined || value === "") return true;
+    const spec = fieldConfig.validation?.min;
+    let bound = null;
+    if (spec && typeof spec === "object" && spec.fromField) {
+      const raw = formData?.[spec.fromField];
+      if (raw === null || raw === undefined || raw === "") return true;
+      bound = Number(raw);
+    } else {
+      bound = Number(spec);
+    }
+    if (!Number.isFinite(bound)) return true;
+    const num = Number(String(value).replace(/,/g, "").trim());
+    return Number.isFinite(num) && num >= bound;
+  },
+
+  /**
+   * Numeric max — absolute number or `{ fromField: "otherField" }` on the same row/form.
+   */
+  max: (value, { fieldConfig, formData }) => {
+    if (value === null || value === undefined || value === "") return true;
+    const spec = fieldConfig.validation?.max;
+    let bound = null;
+    if (spec && typeof spec === "object" && spec.fromField) {
+      const raw = formData?.[spec.fromField];
+      if (raw === null || raw === undefined || raw === "") return true;
+      bound = Number(raw);
+    } else {
+      bound = Number(spec);
+    }
+    if (!Number.isFinite(bound)) return true;
+    const num = Number(String(value).replace(/,/g, "").trim());
+    return Number.isFinite(num) && num <= bound;
+  },
+
+  /**
+   * Required when another field matches a rule (e.g. UOM required when unit is set).
+   */
+  requiredWhen: (value, { fieldConfig, formData }) => {
+    const rule = fieldConfig.validation?.requiredWhen;
+    if (!rule) return true;
+    if (!evaluateFormRule(rule, formData || {})) return true;
+    return !isEmptyValue(value, fieldConfig.field?.type);
+  },
 };
 
 /**
@@ -107,9 +216,9 @@ export function registerFieldRule(name, fn) {
 }
 
 /**
- * Validates every visible leaf field (groups flattened) against its
- * `validation` block using fieldRules. Unknown validation keys (e.g. "regex",
- * "disabled") are ignored — they configure UI behavior, not rules.
+ * Validates every visible leaf field against its `validation` block.
+ * fieldArray children are validated per row; error keys are
+ * `${arrayName}.${index}.${childName}`.
  *
  * @param {array}  formConfig - routeConfig.form
  * @param {object} formData   - Current DynamicForm state
@@ -118,23 +227,74 @@ export function registerFieldRule(name, fn) {
 export function validateFields(formConfig, formData) {
   const errors = {};
 
-  flattenFormConfig(formConfig).forEach((fieldConfig) => {
-    const { field, validation = {} } = fieldConfig;
+  const validateLeaf = (fieldConfig, data, errorKey) => {
+    const { field } = fieldConfig;
     if (!field) return;
-    if (!isFieldVisible(fieldConfig, formData)) return;
+    if (!isFieldVisible(fieldConfig, data)) return;
 
-    const value = formData[field.name];
-    const ctx = { fieldConfig, formData };
+    const validation = { ...(fieldConfig.validation || {}) };
+    // Config-driven date bounds on field.minDate / field.maxDate also validate.
+    if (field.minDate != null && validation.minDate === undefined) {
+      validation.minDate = true;
+    }
+    if (field.maxDate != null && validation.maxDate === undefined) {
+      validation.maxDate = true;
+    }
+
+    const value = data[field.name];
+    const ctx = { fieldConfig: { ...fieldConfig, validation }, formData: data };
 
     for (const ruleName of Object.keys(validation)) {
       const rule = fieldRules[ruleName];
       if (!rule) continue;
       if (validation[ruleName] === false) continue;
       if (!rule(value, ctx)) {
-        errors[field.name] = true;
+        errors[errorKey] = ruleName;
         break;
       }
     }
+  };
+
+  const fieldArrayChildNames = new Set(
+    (formConfig || [])
+      .filter((item) => item?.type === "fieldArray")
+      .flatMap((item) => (item.children || []).map((c) => c?.field?.name).filter(Boolean))
+  );
+
+  (formConfig || []).forEach((item) => {
+    if (item?.type === "fieldArray") {
+      if (!isFieldVisible(item, formData)) return;
+      const name = getFieldArrayName(item);
+      const rows = Array.isArray(formData[name]) ? formData[name] : [];
+      const minItems = Math.max(1, Number(item.minItems) || 1);
+      const effectiveRows =
+        rows.length > 0
+          ? rows
+          : Array.from({ length: minItems }, () => ({}));
+
+      effectiveRows.forEach((row, index) => {
+        (item.children || []).forEach((child) => {
+          if (!child?.field?.name) return;
+          validateLeaf(child, row || {}, `${name}.${index}.${child.field.name}`);
+        });
+      });
+      return;
+    }
+
+    if (item?.type === "group") {
+      if (!isFieldVisible(item, formData)) return;
+      (item.children || []).forEach((child) => {
+        if (!child?.field?.name) return;
+        if (fieldArrayChildNames.has(child.field.name)) return;
+        validateLeaf(child, formData, child.field.name);
+      });
+      return;
+    }
+
+    if (item?.type === "sectionHeader") return;
+    if (!item?.field?.name) return;
+    if (fieldArrayChildNames.has(item.field.name)) return;
+    validateLeaf(item, formData, item.field.name);
   });
 
   return errors;

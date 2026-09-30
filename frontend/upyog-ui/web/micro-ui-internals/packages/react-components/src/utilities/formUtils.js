@@ -24,6 +24,8 @@
  *   - sortByOrder             Sort top-level items and group children by `order`.
  *   - findFieldConfig         Find a leaf field config by `field.name`.
  *   - mergeFormFieldConfigs   Overlay local field overrides onto an MDMS form.
+ *   - buildAccordionSections  body[] (or sectionHeader split) → accordion panels.
+ *   - collectSectionFieldNames / sectionHasFieldError / findAccordionSectionId
  *
  * Dropdown / option shaping:
  *   - toDropdownOption        Build canonical option object from code + name.
@@ -61,20 +63,58 @@
 
 /**
  * Flattens a form config into a single list of leaf fieldConfigs,
- * expanding `group` children. Shared by DynamicForm, useDynamicMDMS,
- * validators — do NOT re-implement locally.
+ * expanding `group` and `fieldArray` children. Shared by DynamicForm,
+ * useDynamicMDMS, validators — do NOT re-implement locally.
+ *
+ * Note: fieldArray children are expanded for MDMS / option discovery.
+ * Row validation walks fieldArray configs separately via validateFields.
  *
  * @param {Array<object>} [formConfig=[]] Top-level form config array (may contain groups).
  * @returns {Array<object>} Flat list of leaf field config objects (groups removed).
  */
 export const flattenFormConfig = (formConfig = []) =>
   formConfig.reduce((acc, fc) => {
-    if (fc?.type === "group") return [...acc, ...(fc.children || [])];
+    if (fc?.type === "group" || fc?.type === "fieldArray") {
+      return [...acc, ...(fc.children || [])];
+    }
     return [...acc, fc];
   }, []);
 
 /**
- * Sorts top-level form items by `order`, and any group's children too.
+ * Resolve the formData key for a fieldArray config.
+ * Prefers field.name; falls back to camelCase of the last key segment.
+ *
+ * @param {object} fieldConfig
+ * @returns {string}
+ */
+export const getFieldArrayName = (fieldConfig) => {
+  if (fieldConfig?.field?.name) return fieldConfig.field.name;
+  const key = String(fieldConfig?.key || "items");
+  const segment = key.includes("_") ? key.split("_").pop() : key;
+  return segment.charAt(0).toLowerCase() + segment.slice(1);
+};
+
+/**
+ * Build an empty row object for a fieldArray from its children field names.
+ *
+ * @param {Array<object>} [children=[]]
+ * @returns {object}
+ */
+export const createEmptyFieldArrayItem = (children = []) => {
+  const row = {};
+  (children || []).forEach((child) => {
+    const name = child?.field?.name;
+    if (!name) return;
+    const type = child.field.type;
+    if (type === "dropdown") row[name] = null;
+    else if (type === "file") row[name] = null;
+    else row[name] = "";
+  });
+  return row;
+};
+
+/**
+ * Sorts top-level form items by `order`, and any group's / fieldArray's children too.
  * Returns a new array; does not mutate the input.
  *
  * @param {Array<object>} [formConfig=[]] Top-level form config array.
@@ -83,7 +123,7 @@ export const flattenFormConfig = (formConfig = []) =>
 export const sortByOrder = (formConfig = []) => {
   const byOrder = (a, b) => (a.order ?? 0) - (b.order ?? 0);
   return [...formConfig].sort(byOrder).map((item) =>
-    item.type === "group" && Array.isArray(item.children)
+    (item.type === "group" || item.type === "fieldArray") && Array.isArray(item.children)
       ? { ...item, children: [...item.children].sort(byOrder) }
       : item
   );
@@ -257,7 +297,13 @@ const resolveLabelByCode = (labelBy, formValues = {}) => {
  */
 export const resolveFieldLabelKey = (fieldConfig, formValues = {}) => {
   const labelBy = fieldConfig?.field?.labelBy;
-  if (!labelBy) return fieldConfig?.summaryLabel || fieldConfig?.key;
+  if (!labelBy) {
+    return (
+      fieldConfig?.summaryLabel ||
+      fieldConfig?.field?.code ||
+      fieldConfig?.key
+    );
+  }
 
   return resolveLabelByCode(labelBy, formValues);
 };
@@ -285,7 +331,7 @@ export const findFieldConfig = (formConfig = [], fieldName) =>
 const mergeFormField = (local, mdms) => {
   const mergedField = { ...local.field, ...mdms.field };
   // Local bindings for compute/label/prefill must survive MDMS field overrides.
-  ["name", "computeFrom", "computeFn", "labelBy", "prefillFrom", "dataSource", "numeric", "unit", "defaultValue", "minDate", "createNewPath", "searchButton"].forEach((key) => {
+  ["name", "code", "computeFrom", "computeFn", "labelBy", "prefillFrom", "dataSource", "numeric", "unit", "defaultValue", "minDate", "maxDate", "createNewPath", "searchButton", "searchCard", "placeholder", "placeholderDefault", "resultLabel", "selectLabel", "notFoundLabel", "notFoundLabelDefault", "createNewLabel"].forEach((key) => {
     if (local.field?.[key] != null) mergedField[key] = local.field[key];
   });
 
@@ -340,7 +386,7 @@ export const mergeFormFieldConfigs = (localForm = [], mdmsForm = []) => {
   };
 
   const overlayMdmsItem = (mdmsItem) => {
-    if (mdmsItem?.type === "group") {
+    if (mdmsItem?.type === "group" || mdmsItem?.type === "fieldArray") {
       return {
         ...mdmsItem,
         children: (mdmsItem.children || []).map((child) => {
@@ -358,6 +404,183 @@ export const mergeFormFieldConfigs = (localForm = [], mdmsForm = []) => {
   };
 
   return sortByOrder(mdmsForm.map(overlayMdmsItem));
+};
+
+/**
+ * Split a flat form[] into accordion panels on `type: "sectionHeader"`.
+ * The header becomes the panel title and is not repeated inside the body.
+ *
+ * @param {Array<object>} [form=[]]
+ * @returns {Array<object>}
+ */
+const splitFormBySectionHeaders = (form = []) => {
+  const sections = [];
+  let current = null;
+
+  const startSection = (meta) => {
+    if (current && current.form.length > 0) sections.push(current);
+    current = {
+      id: meta.id,
+      titleKey: meta.titleKey,
+      titleDefault: meta.titleDefault,
+      hintDefault: meta.hintDefault,
+      form: [],
+    };
+  };
+
+  form.forEach((item, index) => {
+    if (item?.type === "sectionHeader") {
+      startSection({
+        id: String(item.key || `section-${index + 1}`),
+        titleKey: item.label?.code || item.key,
+        titleDefault: item.messages?.labelDefault,
+        hintDefault: item.messages?.hintDefault,
+      });
+      return;
+    }
+    if (!current) {
+      startSection({
+        id: "section-1",
+        titleKey: "COMMON_FORM",
+        titleDefault: null,
+        hintDefault: null,
+      });
+    }
+    current.form.push(item);
+  });
+
+  if (current && current.form.length > 0) sections.push(current);
+  return sections;
+};
+
+/**
+ * Overlay AccordionNewApplication `lists` metadata onto fieldArray items.
+ *
+ * @param {Array<object>} form
+ * @param {object} [lists={}]
+ * @returns {Array<object>}
+ */
+const applyAccordionListMeta = (form = [], lists = {}) => {
+  if (!lists || typeof lists !== "object") return form;
+  return form.map((item) => {
+    if (item?.type !== "fieldArray") return item;
+    const meta = lists[item.key];
+    if (!meta) return item;
+    return {
+      ...item,
+      minItems: meta.minItems ?? item.minItems,
+      maxItems: meta.maxItems ?? item.maxItems,
+      addLabel: meta.addLabel || item.addLabel,
+      removeLabel: meta.removeLabel || item.removeLabel,
+      itemLabel: meta.itemLabelDefault || meta.itemLabel || item.itemLabel,
+      visibleWhen: item.visibleWhen || meta.visibleWhen,
+    };
+  });
+};
+
+/**
+ * CSS cell class for accordion dense grid (mirrors design-ref span rules).
+ *
+ * @param {object} [fieldConfig={}]
+ * @returns {string}
+ */
+export const getAccordionCellClass = (fieldConfig = {}) => {
+  const base = "dynamic-form-accordion__cell";
+  if (
+    fieldConfig.type === "sectionHeader" ||
+    fieldConfig.type === "fieldArray" ||
+    fieldConfig.type === "group" ||
+    fieldConfig.field?.type === "file"
+  ) {
+    return `${base} ${base}--full`;
+  }
+  if (
+    fieldConfig.field?.type === "radio" ||
+    fieldConfig.field?.searchCard ||
+    fieldConfig.field?.searchButton
+  ) {
+    return `${base} ${base}--span-2`;
+  }
+  return base;
+};
+
+/**
+ * Build accordion panels from MDMS / route JSON.
+ * Prefers `config.body[]` (each item is a panel with its own `form[]`).
+ * Falls back to splitting a flat `config.form[]` on `sectionHeader` entries.
+ *
+ * @param {object}        [config={}]     Full MDMS entry (`head`, `body`, `form`, `navigation`).
+ * @param {Array<object>} [localForm=[]]  Field overlays (same shape as mergeFormFieldConfigs local).
+ * @returns {Array<{ id: string, titleKey: string, titleDefault?: string, hintDefault?: string, form: object[] }>}
+ */
+export const buildAccordionSections = (config = {}, localForm = []) => {
+  const overlay = (form) =>
+    applyAccordionListMeta(mergeFormFieldConfigs(localForm, form || []), config.lists);
+  const body = Array.isArray(config.body) ? config.body : [];
+  const fromBody = body
+    .filter((step) => {
+      if (step?.isPreview || step?.type === "review") return false;
+      return Array.isArray(step?.form) && step.form.length > 0;
+    })
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+    .map((step) => ({
+      id: String(step.key || step.route || step.i18nKey || "section"),
+      titleKey: step.i18nKey || step.texts?.header || step.key,
+      titleDefault: step.labelDefault || step.shortLabel,
+      hintDefault: step.hintDefault,
+      isMandatory: step.isMandatory,
+      form: overlay(step.form),
+    }));
+
+  if (fromBody.length > 0) return fromBody;
+
+  return splitFormBySectionHeaders(overlay(config.form || []));
+};
+
+/**
+ * Field / fieldArray names owned by a section form (for error highlighting).
+ *
+ * @param {Array<object>} [form=[]]
+ * @returns {Set<string>}
+ */
+export const collectSectionFieldNames = (form = []) => {
+  const names = new Set();
+  flattenFormConfig(form).forEach((fc) => {
+    if (fc?.field?.name) names.add(fc.field.name);
+  });
+  (form || []).forEach((item) => {
+    if (item?.type === "fieldArray") {
+      const arrayName = getFieldArrayName(item);
+      if (arrayName) names.add(arrayName);
+    }
+  });
+  return names;
+};
+
+/**
+ * True when `errors` includes a key belonging to this section's fields.
+ *
+ * @param {Array<object>} [form=[]]
+ * @param {object}        [errors={}]
+ * @returns {boolean}
+ */
+export const sectionHasFieldError = (form, errors = {}) => {
+  const names = collectSectionFieldNames(form);
+  return Object.keys(errors || {}).some(
+    (key) => names.has(key) || [...names].some((n) => key.startsWith(`${n}.`))
+  );
+};
+
+/**
+ * First accordion section id that currently has a field error.
+ *
+ * @param {Array<object>} [sections=[]]
+ * @param {object}        [errors={}]
+ * @returns {string|null}
+ */
+export const findAccordionSectionId = (sections = [], errors = {}) => {
+  const hit = (sections || []).find((s) => sectionHasFieldError(s.form, errors));
+  return hit?.id || null;
 };
 
 /**
@@ -395,6 +618,20 @@ export const rehydrateBillingCycleOption = (flatData = {}, routeConfig = {}) => 
 };
 
 /**
+ * Collect field names referenced by a visibleWhen rule (including nested and/or).
+ * @param {object} rule
+ * @param {Set<string>} [out]
+ * @returns {Set<string>}
+ */
+const collectVisibleWhenFields = (rule, out = new Set()) => {
+  if (!rule || typeof rule !== "object") return out;
+  if (rule.field) out.add(rule.field);
+  (rule.and || []).forEach((r) => collectVisibleWhenFields(r, out));
+  (rule.or || []).forEach((r) => collectVisibleWhenFields(r, out));
+  return out;
+};
+
+/**
  * Collect form field names whose value changes should trigger a re-render
  * of the given field (value, dynamic label, compute dependencies, visibility).
  * Recurses into group children.
@@ -406,20 +643,38 @@ export const getFieldWatchNames = (fieldConfig) => {
   if (fieldConfig?.type === "group") {
     return (fieldConfig.children || []).flatMap(getFieldWatchNames);
   }
+  if (fieldConfig?.type === "fieldArray") {
+    const names = new Set([getFieldArrayName(fieldConfig)]);
+    collectVisibleWhenFields(fieldConfig.visibleWhen, names);
+    return [...names];
+  }
   const field = fieldConfig?.field;
-  if (!field) return [];
+  if (!field) {
+    const names = new Set();
+    collectVisibleWhenFields(fieldConfig?.visibleWhen, names);
+    return [...names];
+  }
 
   const names = new Set([field.name]);
   if (field.labelBy?.field) names.add(field.labelBy.field);
   (field.computeFrom || []).forEach((n) => names.add(n));
   if (field.prefillFrom) names.add(field.prefillFrom);
-  if (fieldConfig.visibleWhen?.field) names.add(fieldConfig.visibleWhen.field);
+  if (field.dataSource?.dependsOn) names.add(field.dataSource.dependsOn);
+  collectVisibleWhenFields(fieldConfig.visibleWhen, names);
+  collectVisibleWhenFields(fieldConfig.validation?.requiredWhen, names);
+  collectVisibleWhenFields(field.disabledWhen, names);
+  collectVisibleWhenFields(field.enabledWhen, names);
   return [...names];
 };
 
 /**
  * Config-driven show/hide for a field.
- * Supports `hidden: true`, or `visibleWhen: { field, equals }` / `{ field, in: [...] }`.
+ * Supports `hidden: true`, or `visibleWhen`:
+ *   - `{ field, equals }`
+ *   - `{ field, in: [...] }`
+ *   - `{ field, notEmpty: true }` — show when the referenced value is non-empty
+ *   - `{ and: [ rule, ... ] }` — all rules must pass
+ *   - `{ or: [ rule, ... ] }` — any rule may pass
  * Dropdown/object values are compared by uppercase `code`; plain strings are uppercased.
  *
  * @param {object} fieldConfig         Leaf or group field config.
@@ -430,7 +685,29 @@ export const isFieldVisible = (fieldConfig, formData = {}) => {
   if (fieldConfig?.hidden === true) return false;
 
   const rule = fieldConfig?.visibleWhen;
-  if (!rule?.field) return true;
+  if (!rule) return true;
+
+  return evaluateFormRule(rule, formData);
+};
+
+/**
+ * Evaluate a form rule (`visibleWhen` / `requiredWhen` / `disabledWhen` / `enabledWhen`).
+ * Supports nested and/or, equals, in, notEmpty.
+ *
+ * @param {object} rule
+ * @param {object} formData
+ * @returns {boolean}
+ */
+export const evaluateFormRule = (rule, formData = {}) => {
+  if (!rule || typeof rule !== "object") return true;
+
+  if (Array.isArray(rule.and)) {
+    return rule.and.every((r) => evaluateFormRule(r, formData));
+  }
+  if (Array.isArray(rule.or)) {
+    return rule.or.some((r) => evaluateFormRule(r, formData));
+  }
+  if (!rule.field) return true;
 
   const raw = formData[rule.field];
   const current =
@@ -438,6 +715,12 @@ export const isFieldVisible = (fieldConfig, formData = {}) => {
       ? String(raw.code).trim().toUpperCase()
       : String(raw ?? "").trim().toUpperCase();
 
+  if (rule.notEmpty === true) {
+    return current.length > 0;
+  }
+  if (rule.notEmpty === false) {
+    return current.length === 0;
+  }
   if (rule.equals !== undefined) {
     return current === String(rule.equals).trim().toUpperCase();
   }
@@ -445,6 +728,97 @@ export const isFieldVisible = (fieldConfig, formData = {}) => {
     return rule.in.map((v) => String(v).trim().toUpperCase()).includes(current);
   }
   return true;
+};
+
+/**
+ * @deprecated Use evaluateFormRule
+ */
+const evaluateVisibleWhenRule = evaluateFormRule;
+
+/**
+ * Collapse / cascade TradeType-style dotted codes into category / type / subtype options.
+ * Matches SelectTradeUnits ATT behavior.
+ *
+ * @param {Array<object>} options - Raw MDMS TradeType rows
+ * @param {object} [dataSource={}]
+ * @param {object} [formData={}]
+ * @returns {Array<object>}
+ */
+export const filterDependsOnOptions = (options = [], dataSource = {}, formData = {}) => {
+  const hierarchy = dataSource.hierarchy || dataSource.optionLevel;
+  const list = Array.isArray(options) ? options : [];
+
+  if (hierarchy === "category" || dataSource.customiztionRequired) {
+    const seen = new Set();
+    const out = [];
+    list.forEach((item) => {
+      const code = String(item?.code || "").split(".")[0];
+      if (!code || seen.has(code)) return;
+      seen.add(code);
+      out.push({
+        ...item,
+        code,
+        name: code,
+        i18nKey: item.i18nKey || `TRADELICENSE_TRADETYPE_${code}`,
+      });
+    });
+    return out;
+  }
+
+  const parentName = dataSource.dependsOn;
+  if (!parentName) return list;
+
+  const parentCode = optionCode(formData[parentName]);
+  if (!parentCode) return [];
+
+  if (hierarchy === "type" || dataSource.dependsOnSegment === 0) {
+    const seen = new Set();
+    const out = [];
+    list.forEach((item) => {
+      const parts = String(item?.code || "").split(".");
+      if (parts[0]?.toUpperCase() !== parentCode || !parts[1]) return;
+      const code = parts[1];
+      if (seen.has(code)) return;
+      seen.add(code);
+      out.push({
+        ...item,
+        code,
+        name: code,
+        i18nKey: item.i18nKey || `TRADELICENSE_TRADETYPE_${code}`,
+      });
+    });
+    return out;
+  }
+
+  if (hierarchy === "subtype" || dataSource.dependsOnSegment === 1) {
+    // ATT SelectTradeUnits: ob.code.split(".")[1] === TradeType.code
+    // Parent may be the type segment (MANUFACTURE) or a dotted path — normalize.
+    const parentParts = parentCode.split(".").filter(Boolean);
+    const typeCode =
+      parentParts.length >= 2 ? parentParts[1] : parentParts[0] || parentCode;
+
+    return list
+      .filter((item) => {
+        const parts = String(item?.code || "")
+          .split(".")
+          .filter(Boolean);
+        // Leaf subtype codes are CATEGORY.TYPE.SUBTYPE
+        return parts.length >= 3 && parts[1]?.toUpperCase() === typeCode;
+      })
+      .map((item) => ({
+        ...item,
+        code: item.code,
+        name: item.name || item.code,
+        i18nKey: item.i18nKey || `TL_${item.code}`,
+      }));
+  }
+
+  // Generic: keep options whose code starts with parent (prefix match).
+  const prefix = `${parentCode}.`;
+  return list.filter((item) => {
+    const code = String(item?.code || "").toUpperCase();
+    return code === parentCode || code.startsWith(prefix);
+  });
 };
 
 /* ── prefill ────────────────────────────────────────────────────────── */
@@ -466,10 +840,40 @@ export const buildInitialData = (formConfig = [], rawAsset = {}, dropdownData = 
   const { applyDefaults = true } = options;
   const result = {};
 
+  // Initialize fieldArrays first (minItems empty rows or raw array).
+  (formConfig || []).forEach((item) => {
+    if (item?.type !== "fieldArray") return;
+    if (!isFieldVisible(item, { ...rawAsset, ...result })) {
+      // Still seed so the key exists after gate unlocks.
+    }
+    const arrayName = getFieldArrayName(item);
+    const minItems = Math.max(1, Number(item.minItems) || 1);
+    const rawRows = rawAsset[arrayName];
+    if (Array.isArray(rawRows) && rawRows.length > 0) {
+      result[arrayName] = rawRows.map((row) => ({
+        ...createEmptyFieldArrayItem(item.children),
+        ...(row && typeof row === "object" ? row : {}),
+      }));
+    } else {
+      result[arrayName] = Array.from({ length: minItems }, () =>
+        createEmptyFieldArrayItem(item.children)
+      );
+    }
+  });
+
+  const fieldArrayChildNames = new Set(
+    (formConfig || [])
+      .filter((item) => item?.type === "fieldArray")
+      .flatMap((item) => (item.children || []).map((c) => c?.field?.name).filter(Boolean))
+  );
+
   flattenFormConfig(formConfig).forEach((item) => {
     const field = item.field;
     if (!field) return;
     const { name, type, dataSource } = field;
+
+    // Child fields of fieldArrays live inside array rows, not top-level.
+    if (fieldArrayChildNames.has(name)) return;
 
     if (type === "dropdown") {
       if (dataSource?.defaultValueSource === "tenantId") {
@@ -610,6 +1014,54 @@ export const toInputDate = (v) => {
   if (!d) return "";
   const pad = (n) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
+
+/**
+ * Resolve a workbench date bound for DatePicker min/max and validators.
+ *
+ * Supported shapes (all config-driven):
+ * - `"today"` → local today (yyyy-MM-dd)
+ * - `"yyyy-MM-dd"` → absolute date
+ * - `"-3months"` / `"+1months"` / `"-30days"` / `"+1years"` → relative to today
+ * - `{ "months": -3 }` / `{ "days": -30 }` / `{ "years": 1 }` → relative object
+ *
+ * @param {string|object|null|undefined} spec
+ * @param {Date} [now=new Date()]
+ * @returns {string} yyyy-MM-dd, or empty string when unset/invalid
+ */
+export const resolveConfigDate = (spec, now = new Date()) => {
+  if (spec == null || spec === "") return "";
+  if (typeof spec === "string") {
+    const trimmed = spec.trim();
+    if (trimmed.toLowerCase() === "today") return toInputDate(now);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+    const relative = trimmed.match(/^([+-]?\d+)\s*(days?|months?|years?)$/i);
+    if (relative) {
+      const amount = Number(relative[1]);
+      const unit = relative[2].toLowerCase();
+      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      if (unit.startsWith("day")) d.setDate(d.getDate() + amount);
+      else if (unit.startsWith("month")) d.setMonth(d.getMonth() + amount);
+      else if (unit.startsWith("year")) d.setFullYear(d.getFullYear() + amount);
+      return toInputDate(d);
+    }
+    return "";
+  }
+  if (typeof spec === "object") {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    if (Number.isFinite(Number(spec.years))) d.setFullYear(d.getFullYear() + Number(spec.years));
+    if (Number.isFinite(Number(spec.months))) d.setMonth(d.getMonth() + Number(spec.months));
+    if (Number.isFinite(Number(spec.days))) d.setDate(d.getDate() + Number(spec.days));
+    if (
+      spec.years == null &&
+      spec.months == null &&
+      spec.days == null
+    ) {
+      return "";
+    }
+    return toInputDate(d);
+  }
+  return "";
 };
 
 /* ── DOM helper ─────────────────────────────────────────────────────── */

@@ -4,6 +4,7 @@ import {
   Header,
   CardSubHeader,
   CardText,
+  CheckBox,
   CitizenInfoLabel,
   EditIcon,
   LinkButton,
@@ -49,6 +50,9 @@ const WrapCheckPage = ({
     return getPath(pattern, routeParams);
   }, [modulePath, routeParams, pathname]);
   const [toast, setToast] = useState(null);
+  // Consent required before submit (same pattern as Estate / PT DynamicCheckPage).
+  const [agree, setAgree] = useState(false);
+  const setdeclarationhandler = () => setAgree((prev) => !prev);
   const {
     TradeDetails,
     address,
@@ -117,6 +121,10 @@ const WrapCheckPage = ({
     routeLink = `${basePath}`;
     routeLink = routeLink.replace("/check", "");
   }
+  // Single-page DynamicForm flow — all summary edits return to the form step.
+  // Dynamic accordion form lives at /apply; docs landing stays /info.
+  const editRoute = value?.__dynamicForm ? `${routeLink}/apply` : null;
+  const goEdit = (legacyPath) => routeTo(editRoute || `${routeLink}/${legacyPath}`);
   return <React.Fragment>
       {window.location.href.includes("/citizen") ? <Timeline currentStep={4} /> : null}
 
@@ -128,12 +136,12 @@ const WrapCheckPage = ({
         fontSize: "28px"
       }}>{t("TL_LOCALIZATION_TRADE_DETAILS")}</CardHeader>
         <StatusTable>
-          <LinkButton label={<EditIcon className="tl-auto-157" />} onClick={() => routeTo(`${routeLink}/TradeName`)} className="tl-auto-156" />
+          <LinkButton label={<EditIcon className="tl-auto-157" />} onClick={() => goEdit("TradeName")} className="tl-auto-156" />
           <Row className="border-none" textStyle={{
           marginRight: "-10px"
         }} label={t("TL_LOCALIZATION_TRADE_NAME")} text={t(TradeDetails?.TradeName)} />
-          <Row className="border-none" label={t("TL_STRUCTURE_TYPE")} text={t(`TL_${TradeDetails?.StructureType.code}`)} />
-          <Row className="border-none" label={t("TL_STRUCTURE_SUB_TYPE")} text={t(TradeDetails?.StructureType.code !== "IMMOVABLE" ? TradeDetails?.VehicleType?.i18nKey : TradeDetails?.BuildingType?.i18nKey)} />
+          <Row className="border-none" label={t("TL_STRUCTURE_TYPE")} text={t(`TL_${TradeDetails?.StructureType?.code}`)} />
+          <Row className="border-none" label={t("TL_STRUCTURE_SUB_TYPE")} text={t(TradeDetails?.StructureType?.code !== "IMMOVABLE" ? TradeDetails?.VehicleType?.i18nKey : TradeDetails?.BuildingType?.i18nKey)} />
           <Row className="border-none" label={t("TL_TRADE_GST_NO")} text={TradeDetails?.TradeGSTNumber || t("CS_NA")} />
           <Row className="border-none" label={t("TL_OPERATIONAL_AREA")} text={TradeDetails?.OperationalSqFtArea || t("CS_NA")} />
           <Row className="border-none" label={t("TL_NO_OF_EMPLOYEES")} text={TradeDetails?.NumberOfEmployees || t("CS_NA")} />
@@ -159,36 +167,31 @@ const WrapCheckPage = ({
               </div>)}
         </StatusTable>
       </Card>
-      {!(TradeDetails?.StructureType.code === "MOVABLE") && <Card>
+      {!(TradeDetails?.StructureType?.code === "MOVABLE") && <Card>
         <StatusTable>
           <CardHeader styles={{
           fontSize: "28px"
         }}>{t("TL_NEW_TRADE_DETAILS_HEADER_TRADE_LOC_DETAILS")}</CardHeader>
           {cpt && cpt.details && cpt.details.propertyId ? <React.Fragment>
-              <LinkButton label={<EditIcon className="tl-auto-159" />} onClick={() => routeTo(`${routeLink}/know-your-property`)} className="tl-auto-158" />
+              <LinkButton label={<EditIcon className="tl-auto-159" />} onClick={() => goEdit("know-your-property")} className="tl-auto-158" />
               <Row className="border-none" textStyle={{
             marginRight: "-10px"
           }} label={t("TL_PROPERTY_ID")} text={`${cpt.details.propertyId?.trim()}`} />
               <Row className="border-none" label={t("TL_CHECK_ADDRESS")} text={`${cpt.details?.address?.doorNo?.trim() ? `${cpt.details?.address?.doorNo?.trim()}, ` : ""} ${cpt.details?.address?.street?.trim() ? `${cpt.details?.address?.street?.trim()}, ` : ""} ${cpt.details?.address?.buildingName?.trim() ? `${cpt.details?.address?.buildingName?.trim()}, ` : ""}
               ${t(cpt.details?.address?.locality?.name)}, ${t(cpt.details?.address?.city)} ${cpt.details?.address?.pincode?.trim() ? `,${cpt.details?.address?.pincode?.trim()}` : ""}`} />
             </React.Fragment> : <React.Fragment>
-              <LinkButton label={<EditIcon className="tl-auto-161" />} onClick={() => routeTo(`${routeLink}/map`)} className="tl-auto-160" />
-              <Row className="border-none" label={t("TL_CHECK_ADDRESS")} text={`${address?.doorNo?.trim() ? `${address?.doorNo?.trim()}, ` : ""} ${address?.street?.trim() ? `${address?.street?.trim()}, ` : ""}${t(address?.locality?.i18nkey)}, ${t(address?.city.code)} ${address?.pincode?.trim() ? `,${address?.pincode?.trim()}` : ""}`} />
+              <LinkButton label={<EditIcon className="tl-auto-161" />} onClick={() => goEdit("map")} className="tl-auto-160" />
+              <Row className="border-none" label={t("TL_CHECK_ADDRESS")} text={`${address?.doorNo?.trim() ? `${address?.doorNo?.trim()}, ` : ""} ${address?.street?.trim() ? `${address?.street?.trim()}, ` : ""}${t(address?.locality?.i18nkey)}, ${t(address?.city?.code || address?.city)} ${address?.pincode?.trim() ? `,${address?.pincode?.trim()}` : ""}`} />
             </React.Fragment>}
         </StatusTable>
-        {/* <div style={{ textAlign: "left" }}>
-          <Link to={`/upyog-ui/citizen/commonpt/view-property?propertyId=${cpt?.details?.propertyId || cptId?.id || value?.tradeLicenseDetail?.additionalDetail?.propertyId}&tenantId=${cpt?.details?.tenantId || value?.tenantId}`}>
-            <LinkButton style={{ textAlign: "left" }} label={t("TL_VIEW_PROPERTY")} />
-          </Link>
-         </div> */}
       </Card>}
       <Card>
         <StatusTable>
           <CardHeader styles={{
           fontSize: "28px"
         }}>{t("TL_NEW_OWNER_DETAILS_HEADER")}</CardHeader>
-          <LinkButton label={<EditIcon className="tl-auto-163" />} onClick={() => routeTo(`${routeLink}/owner-details`)} className="tl-auto-162" />
-          {owners.owners && owners?.owners?.map((owner, index) => <div key={index}>
+          <LinkButton label={<EditIcon className="tl-auto-163" />} onClick={() => goEdit("owner-details")} className="tl-auto-162" />
+          {owners?.owners && owners?.owners?.map((owner, index) => <div key={index}>
                 <CardSubHeader>
                   {t("TL_PAYMENT_PAID_BY_PLACEHOLDER")}-{index + 1}
                 </CardSubHeader>
@@ -210,15 +213,25 @@ const WrapCheckPage = ({
           <CardHeader styles={{
           fontSize: "28px"
         }}>{t("TL_COMMON_DOCS")}</CardHeader>
-          <LinkButton label={<EditIcon className="tl-auto-165" />} onClick={() => routeTo(`${routeLink}/proof-of-identity`)} className="tl-auto-164" />
+          <LinkButton label={<EditIcon className="tl-auto-165" />} onClick={() => goEdit("proof-of-identity")} className="tl-auto-164" />
           <div>
-            {owners?.documents["OwnerPhotoProof"] || owners?.documents["ProofOfIdentity"] || owners?.documents["ProofOfOwnership"] ? <TLDocument value={value}></TLDocument> : <StatusTable>
+            {owners?.documents?.["OwnerPhotoProof"] || owners?.documents?.["ProofOfIdentity"] || owners?.documents?.["ProofOfOwnership"] ? <TLDocument value={value}></TLDocument> : <StatusTable>
                 <Row className="border-none" text={t("TL_NO_DOCUMENTS_MSG")} />
               </StatusTable>}
           </div>
         </StatusTable>
         {toast && <Toast error={toast.key === "error"} label={t(toast.message)} onClose={() => setToast(null)} isDleteBtn={true} className="tl-auto-166" />}
-        <SubmitBar label={t("CS_COMMON_SUBMIT")} onSubmit={CheckForBillingSlab} />
+        <CheckBox
+          label={t("TL_DECLARATION_CONFIRM")}
+          onChange={setdeclarationhandler}
+          checked={agree}
+          styles={{ height: "auto", marginTop: "16px" }}
+        />
+        <SubmitBar
+          label={t("CS_COMMON_SUBMIT")}
+          onSubmit={CheckForBillingSlab}
+          disabled={!agree}
+        />
       </Card>
     </React.Fragment>;
 };

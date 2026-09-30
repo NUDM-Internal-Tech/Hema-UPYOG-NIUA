@@ -77,6 +77,7 @@ import {
   DatePicker,
   UploadFile,
 } from "@nudmcdgnpm/digit-ui-react-components";
+import LabelFieldPair from "../atoms/LabelFieldPair";
 import {
   toInputDate,
   resolveFieldLabelKey,
@@ -84,22 +85,22 @@ import {
   optionCode,
   enrichDropdownSelection,
   isFieldVisible,
+  getFieldArrayName,
+  createEmptyFieldArrayItem,
+  resolveConfigDate,
+  filterDependsOnOptions,
+  evaluateFormRule,
 } from "../utilities/formUtils";
 import { formatDurationDisplay } from "../utilities/validators";
 
-/** Resolve DatePicker `min` from field.minDate ("today" or yyyy-MM-dd). */
-const resolveFieldMinDate = (minDate) => {
-  if (minDate === "today") return toInputDate(new Date());
-  if (typeof minDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(minDate)) {
-    return minDate;
-  }
-  return undefined;
-};
+/** Resolve DatePicker `min` / `max` from field.minDate / field.maxDate. */
+const resolveFieldBoundDate = (spec) => resolveConfigDate(spec) || undefined;
 
 /* ── shared sub-renderers ─────────────────────────────────────────────── */
 
 /**
  * Field label row: translated text, optional unit, required asterisk, error styling.
+ * Uses card-label-smaller so LabelFieldPair lays label and control out inline.
  *
  * @param {object}  props
  * @param {string}  props.text      Already-translated label text.
@@ -109,7 +110,11 @@ const resolveFieldMinDate = (minDate) => {
  * @returns {JSX.Element}
  */
 const FieldLabel = ({ text, required, hasError, unit }) => (
-  <CardLabel className={hasError ? "dynamic-form-field__label--error" : undefined}>
+  <CardLabel
+    className={`card-label-smaller${
+      hasError ? " dynamic-form-field__label--error" : ""
+    }`}
+  >
     {text}
     {unit && <span className="dynamic-form-field__unit"> {unit}</span>}
     {required && (
@@ -191,15 +196,18 @@ const DynamicFormField = ({
   searchPanel = null,
   onSelectSearchResult,
   onCreateNewFromSearch,
+  enrichFieldArrayRow = null,
+  /** Unique HTML name for radio groups (required when the same field repeats in a fieldArray). */
+  inputName = null,
 }) => {
   const { field, validation = {}, messages = {} } = fieldConfig;
   const { name, type, placeholder, unit } = field || {};
+  const radioInputName = inputName || name;
 
   /**
    * Dropdown / radio option list.
    * Prefers MDMS dropdownData[name|key]; falls back to static fieldConfig.options.
-   * When an MDMS i18nKey does not translate, substitutes name/code so the UI
-   * still shows a readable label.
+   * Applies dependsOn / hierarchy cascade (TradeType category → type → subtype).
    *
    * @returns {object[]}
    */
@@ -207,20 +215,34 @@ const DynamicFormField = ({
     if (type !== "dropdown" && type !== "radio") return EMPTY_OPTIONS;
 
     const fromMdms = dropdownData[name] || dropdownData[fieldConfig.key];
-    if (Array.isArray(fromMdms) && fromMdms.length > 0) {
-      return fromMdms.map((o) => {
-        const translated = o.i18nKey ? t(o.i18nKey) : "";
-        const untranslated = !translated || translated === o.i18nKey;
-        return untranslated ? { ...o, i18nKey: o.name || o.code } : o;
-      });
+    let base =
+      Array.isArray(fromMdms) && fromMdms.length > 0
+        ? fromMdms
+        : (fieldConfig.options || []).map((o) => ({
+            code: o.code || o.value,
+            name: o.name || o.value || o.code,
+            value: o.i18nKey || o.localname || o.value || o.code,
+            i18nKey: o.i18nKey || o.localname || o.value || o.code,
+          }));
+
+    const ds = field?.dataSource;
+    if (
+      ds &&
+      (ds.dependsOn ||
+        ds.hierarchy ||
+        ds.optionLevel ||
+        ds.customiztionRequired ||
+        ds.dependsOnSegment != null)
+    ) {
+      base = filterDependsOnOptions(base, ds, formData);
     }
-    return (fieldConfig.options || []).map((o) => ({
-      code: o.code || o.value,
-      name: o.value || o.code,
-      value: o.i18nKey || o.localname || o.value || o.code,
-      i18nKey: o.i18nKey || o.localname || o.value || o.code,
-    }));
-  }, [type, name, fieldConfig, dropdownData, t]);
+
+    return base.map((o) => {
+      const translated = o.i18nKey ? t(o.i18nKey) : "";
+      const untranslated = !translated || translated === o.i18nKey;
+      return untranslated ? { ...o, i18nKey: o.name || o.code } : o;
+    });
+  }, [type, name, field, fieldConfig, dropdownData, t, formData]);
 
   /**
    * Compiled validation.regex for stripping illegal characters on text input.
@@ -237,11 +259,141 @@ const DynamicFormField = ({
   );
 
   // ── Non-leaf: section header ─────────────────────────────────────────
+  // ── Non-leaf: section header (respects visibleWhen) ──────────────────
   if (fieldConfig.type === "sectionHeader") {
+    if (!isFieldVisible(fieldConfig, formData)) return null;
+    const headerKey = fieldConfig.label?.code || fieldConfig.key;
+    const headerDefault = fieldConfig.messages?.labelDefault;
+    const headerTranslated = headerDefault
+      ? t(headerKey, { defaultValue: headerDefault })
+      : t(headerKey);
+    const headerText =
+      headerDefault && (!headerTranslated || headerTranslated === headerKey)
+        ? headerDefault
+        : headerTranslated;
     return (
       <h2 className="dynamic-form-field__section-header">
-        {t(fieldConfig.label?.code || fieldConfig.key)}
+        {headerText}
       </h2>
+    );
+  }
+
+  // ── Non-leaf: fieldArray — repeatable card rows with Add / Remove ────
+  if (fieldConfig.type === "fieldArray") {
+    if (!isFieldVisible(fieldConfig, formData)) return null;
+
+    const arrayName = getFieldArrayName(fieldConfig);
+    const minItems = Math.max(1, Number(fieldConfig.minItems) || 1);
+    const children = fieldConfig.children || [];
+    const rows = Array.isArray(formData[arrayName])
+      ? formData[arrayName]
+      : [createEmptyFieldArrayItem(children)];
+    const addLabel = fieldConfig.addLabel || "CS_COMMON_ADD";
+    const removeLabel = fieldConfig.removeLabel || "CS_COMMON_REMOVE";
+    const itemLabel = fieldConfig.itemLabel || fieldConfig.key || arrayName;
+
+    const commitRows = (nextRows) => onChange(arrayName, nextRows);
+
+    const updateRowField = (rowIndex, childName, value, resetFields = []) => {
+      const nextRows = rows.map((row, i) => {
+        if (i !== rowIndex) return row;
+        if (typeof enrichFieldArrayRow === "function") {
+          return (
+            enrichFieldArrayRow({
+              childName,
+              value,
+              row,
+              formData,
+              resetFields,
+              fieldConfig,
+            }) || { ...row, [childName]: value }
+          );
+        }
+        const updated = { ...row, [childName]: value };
+        (resetFields || []).forEach((f) => {
+          updated[f] = null;
+        });
+        return updated;
+      });
+      commitRows(nextRows);
+    };
+
+    const addRow = () => {
+      commitRows([...rows, createEmptyFieldArrayItem(children)]);
+    };
+
+    const removeRow = (rowIndex) => {
+      if (rows.length <= minItems) return;
+      commitRows(rows.filter((_, i) => i !== rowIndex));
+    };
+
+    return (
+      <div className="dynamic-form-field__field-array">
+        {rows.map((row, rowIndex) => {
+          const rowErrors = {};
+          Object.keys(errors || {}).forEach((key) => {
+            const prefix = `${arrayName}.${rowIndex}.`;
+            if (key.startsWith(prefix)) {
+              rowErrors[key.slice(prefix.length)] = errors[key];
+            }
+          });
+
+          return (
+            <div
+              key={`${arrayName}-${rowIndex}`}
+              className="dynamic-form-field__field-array-card"
+            >
+              <div className="dynamic-form-field__field-array-card-header">
+                <h3 className="dynamic-form-field__field-array-card-title">
+                  {t(itemLabel)} {rowIndex + 1}
+                </h3>
+                {rows.length > minItems ? (
+                  <button
+                    type="button"
+                    className="dynamic-form-field__field-array-remove"
+                    onClick={() => removeRow(rowIndex)}
+                    disabled={isDisabled}
+                  >
+                    {t(removeLabel)}
+                  </button>
+                ) : null}
+              </div>
+              <div className="dynamic-form-field__field-array-card-body">
+                {children.map((child) => (
+                  <DynamicFormField
+                    key={`${child.key}-${rowIndex}`}
+                    fieldConfig={child}
+                    formData={{ ...(formData || {}), ...(row || {}) }}
+                    onChange={(name, value, resetFields) =>
+                      updateRowField(rowIndex, name, value, resetFields)
+                    }
+                    errors={rowErrors}
+                    dropdownData={dropdownData}
+                    t={t}
+                    isDisabled={isDisabled}
+                    onFileUpload={onFileUpload}
+                    onFieldSearch={onFieldSearch}
+                    isFieldSearching={isFieldSearching}
+                    searchPanel={searchPanel}
+                    onSelectSearchResult={onSelectSearchResult}
+                    onCreateNewFromSearch={onCreateNewFromSearch}
+                    enrichFieldArrayRow={enrichFieldArrayRow}
+                    inputName={`${arrayName}.${rowIndex}.${child?.field?.name || child.key}`}
+                  />
+                ))}
+              </div>
+            </div>
+          );
+        })}
+        <button
+          type="button"
+          className="dynamic-form-field__field-array-add"
+          onClick={addRow}
+          disabled={isDisabled}
+        >
+          {t(addLabel)}
+        </button>
+      </div>
     );
   }
 
@@ -284,8 +436,51 @@ const DynamicFormField = ({
 
   const value = formData[name];
   const hasError = errors[name];
-  const errorMsg = t(messages.error || "FIELD_REQUIRED");
+  const errorRule =
+    typeof errors?.[name] === "string" && errors[name] ? errors[name] : "error";
+  const errorKey = messages[errorRule] || messages.error || "FIELD_REQUIRED";
+  const errorDefault =
+    messages[`${errorRule}Default`] || messages.errorDefault || messages.labelDefault;
+  const errorTranslated = errorDefault
+    ? t(errorKey, { defaultValue: errorDefault })
+    : t(errorKey);
+  const errorMsgBase =
+    errorDefault && (!errorTranslated || errorTranslated === errorKey)
+      ? errorDefault
+      : errorTranslated;
+  const errorMsg = (() => {
+    if (errorRule !== "min" && errorRule !== "max") return errorMsgBase;
+    const loField = validation?.min?.fromField;
+    const hiField = validation?.max?.fromField;
+    const lo = loField != null ? formData?.[loField] : null;
+    const hi = hiField != null ? formData?.[hiField] : null;
+    if (lo == null && hi == null) return errorMsgBase;
+    return `${errorMsgBase} ${lo ?? ""} - ${hi ?? ""}`.trim();
+  })();
   const labelKey = resolveFieldLabelKey(fieldConfig, formData);
+  const labelDefault = messages.labelDefault;
+  const translatedLabel = labelDefault
+    ? t(labelKey, { defaultValue: labelDefault })
+    : t(labelKey);
+  const labelText =
+    labelDefault && (!translatedLabel || translatedLabel === labelKey)
+      ? labelDefault
+      : translatedLabel;
+
+  const requiredByWhen =
+    validation.requiredWhen && evaluateFormRule(validation.requiredWhen, formData);
+  const showRequired = Boolean(validation.required || requiredByWhen);
+
+  let fieldDisabled = Boolean(isDisabled || validation.disabled || validation.readOnly);
+  if (field.enabledWhen) {
+    fieldDisabled = fieldDisabled || !evaluateFormRule(field.enabledWhen, formData);
+  }
+  if (field.disabledWhen) {
+    fieldDisabled = fieldDisabled || evaluateFormRule(field.disabledWhen, formData);
+  }
+
+  const dropdownResetFields = field.dataSource?.resetFields || [];
+
   /** Duration compute fields may display as years when months > 12. */
   const isDurationField = field.computeFn === "calculateDuration";
   const durationMonths = isDurationField ? Number(value) : NaN;
@@ -299,7 +494,7 @@ const DynamicFormField = ({
 
   // ── dropdown ─────────────────────────────────────────────────────────
   if (type === "dropdown") {
-    const isFieldDisabled = isDisabled || fieldConfig.key === "EST_CITY";
+    const isFieldDisabled = fieldDisabled || fieldConfig.key === "EST_CITY";
     /**
      * Safe translator for Digit Dropdown (never returns empty for a key).
      * @param {string} key
@@ -314,75 +509,89 @@ const DynamicFormField = ({
       (value && typeof value === "object" ? value : null);
 
     return (
-      <>
-        <FieldLabel text={t(labelKey)} required={validation.required} hasError={hasError} />
+      <LabelFieldPair>
+        <FieldLabel text={labelText} required={showRequired} hasError={hasError} />
         <div className="field" data-field-error={hasError ? "true" : undefined}>
           <Dropdown
             placeholder={tSafe(placeholder || "")}
             selected={selected}
             option={options}
             optionKey="i18nKey"
-            select={(val) => onChange(name, enrichDropdownSelection(val, options))}
+            select={(val) =>
+              onChange(
+                name,
+                enrichDropdownSelection(val, options),
+                dropdownResetFields
+              )
+            }
             t={tSafe}
             disable={isFieldDisabled}
             optionCardStyles={field.optionCardStyles}
           />
           <FieldError show={hasError} message={errorMsg} />
         </div>
-      </>
+      </LabelFieldPair>
     );
   }
 
   // ── radio ────────────────────────────────────────────────────────────
   if (type === "radio") {
-    const radioDisabled = isDisabled || validation.disabled;
+    const radioDisabled = fieldDisabled;
+    const selectedCode = optionCode(value);
     return (
-      <>
-        <FieldLabel text={t(labelKey)} required={validation.required} hasError={hasError} />
-        <div
-          className="field dynamic-form-field__radio-group"
-          data-field-error={hasError ? "true" : undefined}
-        >
-          {options.map((opt) => (
-            <label
-              key={opt.code}
-              className={`dynamic-form-field__radio-label${
-                radioDisabled ? ` dynamic-form-field__radio-label--disabled` : ""
-              }`}
-            >
-              <input
-                type="radio"
-                name={name}
-                value={opt.code}
-                checked={value === opt.code}
-                disabled={radioDisabled}
-                onChange={() => onChange(name, opt.code)}
-                className="dynamic-form-field__radio-input"
-              />
-              {t(opt.i18nKey || opt.label || opt.name || opt.code)}
-            </label>
-          ))}
+      <LabelFieldPair>
+        <FieldLabel text={labelText} required={showRequired} hasError={hasError} />
+        <div className="field" data-field-error={hasError ? "true" : undefined}>
+          <div className="dynamic-form-field__radio-group">
+            {options.map((opt) => (
+              <label
+                key={opt.code}
+                className={`dynamic-form-field__radio-label${
+                  radioDisabled ? ` dynamic-form-field__radio-label--disabled` : ""
+                }`}
+              >
+                <input
+                  type="radio"
+                  name={radioInputName}
+                  value={opt.code}
+                  checked={selectedCode === optionCode(opt)}
+                  disabled={radioDisabled}
+                  onChange={() => onChange(name, opt.code, dropdownResetFields)}
+                  className="dynamic-form-field__radio-input"
+                />
+                {(() => {
+                  const key = opt.i18nKey || opt.label || opt.name || opt.code;
+                  const translated = t(key);
+                  if ((!translated || translated === key) && (opt.name || opt.label)) {
+                    return opt.name || opt.label;
+                  }
+                  return translated || key;
+                })()}
+              </label>
+            ))}
+          </div>
+          <FieldError show={hasError} message={errorMsg} />
         </div>
-        <FieldError show={hasError} message={errorMsg} />
-      </>
+      </LabelFieldPair>
     );
   }
 
   // ── date ─────────────────────────────────────────────────────────────
   if (type === "date") {
     return (
-      <>
-        <FieldLabel text={t(labelKey)} required={validation.required} hasError={hasError} />
+      <LabelFieldPair>
+        <FieldLabel text={labelText} required={showRequired} hasError={hasError} />
         <div className="field" data-field-error={hasError ? "true" : undefined}>
           <DatePicker
             date={toInputDate(value)}
-            disable={isDisabled || validation.disabled}
-            min={resolveFieldMinDate(field.minDate)}
+            disable={fieldDisabled}
+            min={resolveFieldBoundDate(field.minDate)}
+            max={resolveFieldBoundDate(field.maxDate)}
             onChange={(d) => onChange(name, d)}
           />
           <FieldError show={hasError} message={errorMsg} />
         </div>
-      </>
+      </LabelFieldPair>
     );
   }
 
@@ -398,8 +607,8 @@ const DynamicFormField = ({
       t("CS_ACTION_FILEUPLOADED");
 
     return (
-      <>
-        <FieldLabel text={t(labelKey)} required={validation.required} hasError={hasError} />
+      <LabelFieldPair>
+        <FieldLabel text={labelText} required={showRequired} hasError={hasError} />
         <div className="field" data-field-error={hasError ? "true" : undefined}>
           <UploadFile
             id={name}
@@ -411,7 +620,7 @@ const DynamicFormField = ({
           />
           <FieldError show={hasError} message={errorMsg} />
         </div>
-      </>
+      </LabelFieldPair>
     );
   }
 
@@ -419,30 +628,99 @@ const DynamicFormField = ({
   if (useSearchCard) {
     const panelForField = searchPanel?.fieldName === name ? searchPanel : null;
     return (
-      <>
-        <FieldLabel text={t(labelKey)} required={validation.required} hasError={hasError} unit={textUnit} />
+      <LabelFieldPair>
+        <FieldLabel text={labelText} required={showRequired} hasError={hasError} unit={textUnit} />
         <div className="field" data-field-error={hasError ? "true" : undefined}>
           <div
             className={`dynamic-form-field__lookup${
               showSearchTextButton ? " dynamic-form-field__lookup--with-button" : ""
             }`}
           >
-            <TextInput
-              placeholder={t(placeholder || "")}
-              value={value || ""}
-              onChange={(e) =>
-                applyTextInputChange(e, { name, sanitizeRegex, validation, onChange })
-              }
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  onFieldSearch?.(name);
+            <div className="dynamic-form-field__lookup-input-container">
+              <TextInput
+                placeholder={(() => {
+                  if (!field.placeholderDefault) return t(placeholder || "");
+                  const translated = t(placeholder || "", {
+                    defaultValue: field.placeholderDefault,
+                  });
+                  return !translated || translated === placeholder
+                    ? field.placeholderDefault
+                    : translated;
+                })()}
+                value={value || ""}
+                onChange={(e) =>
+                  applyTextInputChange(e, { name, sanitizeRegex, validation, onChange })
                 }
-              }}
-              disabled={isDisabled || validation.disabled}
-              readOnly={validation.readOnly}
-              errorStyle={hasError}
-            />
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    onFieldSearch?.(name);
+                  }
+                }}
+                disabled={fieldDisabled}
+                readOnly={validation.readOnly}
+                errorStyle={hasError}
+              />
+              {panelForField?.status === "matches" && Array.isArray(panelForField.matches) && (
+                <div className="dynamic-form-field__suggest-box">
+                  {panelForField.matches.map((match) => (
+                    <button
+                      key={match.estateNo}
+                      type="button"
+                      className="dynamic-form-field__suggest-item"
+                      onClick={() => onSelectSearchResult?.(name, match)}
+                    >
+                      <span className="dynamic-form-field__suggest-no">
+                        {match.label || match.estateNo}
+                      </span>
+                      {match.subtitle ? (
+                        <span className="dynamic-form-field__suggest-sub">
+                          {match.subtitle}
+                        </span>
+                      ) : null}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {panelForField?.status === "found" && (
+                <div className="dynamic-form-field__result-card">
+                  <div className="dynamic-form-field__result-row">
+                    <span>{t(field.resultLabel || labelKey || "CS_COMMON_ASSET_NUMBER")}</span>
+                    <span>{panelForField.estateNo}</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="dynamic-form-field__select-button"
+                    onClick={() => onSelectSearchResult?.(name)}
+                  >
+                    {t(field.selectLabel || "CS_COMMON_SELECT")}
+                  </button>
+                </div>
+              )}
+              {panelForField?.status === "notFound" && (
+                <div className="dynamic-form-field__not-found">
+                  <p className="dynamic-form-field__not-found-text">
+                    {(() => {
+                      const key = field.notFoundLabel || "CS_COMMON_NOT_FOUND";
+                      if (!field.notFoundLabelDefault) return t(key);
+                      const translated = t(key, {
+                        defaultValue: field.notFoundLabelDefault,
+                      });
+                      return !translated || translated === key
+                        ? field.notFoundLabelDefault
+                        : translated;
+                    })()}
+                  </p>
+                  <button
+                    type="button"
+                    className="dynamic-form-field__create-button"
+                    onClick={() => onCreateNewFromSearch?.(name)}
+                  >
+                    {t(field.createNewLabel || "CS_COMMON_CREATE_NEW")}
+                  </button>
+                </div>
+              )}
+            </div>
             <button
               type="button"
               className={
@@ -465,68 +743,15 @@ const DynamicFormField = ({
             </button>
           </div>
           <FieldError show={hasError} message={errorMsg} />
-
-          {panelForField?.status === "matches" && Array.isArray(panelForField.matches) && (
-            <div className="dynamic-form-field__suggest-box">
-              {panelForField.matches.map((match) => (
-                <button
-                  key={match.estateNo}
-                  type="button"
-                  className="dynamic-form-field__suggest-item"
-                  onClick={() => onSelectSearchResult?.(name, match)}
-                >
-                  <span className="dynamic-form-field__suggest-no">
-                    {match.label || match.estateNo}
-                  </span>
-                  {match.subtitle ? (
-                    <span className="dynamic-form-field__suggest-sub">
-                      {match.subtitle}
-                    </span>
-                  ) : null}
-                </button>
-              ))}
-            </div>
-          )}
-
-          {panelForField?.status === "found" && (
-            <div className="dynamic-form-field__result-card">
-              <div className="dynamic-form-field__result-row">
-                <span>{t(field.resultLabel || labelKey || "CS_COMMON_ASSET_NUMBER")}</span>
-                <span>{panelForField.estateNo}</span>
-              </div>
-              <button
-                type="button"
-                className="dynamic-form-field__select-button"
-                onClick={() => onSelectSearchResult?.(name)}
-              >
-                {t(field.selectLabel || "CS_COMMON_SELECT")}
-              </button>
-            </div>
-          )}
-
-          {panelForField?.status === "notFound" && (
-            <div className="dynamic-form-field__not-found">
-              <p className="dynamic-form-field__not-found-text">
-                {t(field.notFoundLabel || "CS_COMMON_NOT_FOUND")}
-              </p>
-              <button
-                type="button"
-                className="dynamic-form-field__create-button"
-                onClick={() => onCreateNewFromSearch?.(name)}
-              >
-                {t(field.createNewLabel || "CS_COMMON_CREATE_NEW")}
-              </button>
-            </div>
-          )}
         </div>
-      </>
+      </LabelFieldPair>
     );
   }
 
   // ── default: plain text input ────────────────────────────────────────
   return (
-    <>
-      <FieldLabel text={t(labelKey)} required={validation.required} hasError={hasError} unit={textUnit} />
+    <LabelFieldPair>
+      <FieldLabel text={labelText} required={showRequired} hasError={hasError} unit={textUnit} />
       <div className="field" data-field-error={hasError ? "true" : undefined}>
         <TextInput
           placeholder={t(placeholder || "")}
@@ -534,13 +759,13 @@ const DynamicFormField = ({
           onChange={(e) =>
             applyTextInputChange(e, { name, sanitizeRegex, validation, onChange })
           }
-          disabled={isDisabled || validation.disabled}
+          disabled={fieldDisabled}
           readOnly={validation.readOnly}
           errorStyle={hasError}
         />
         <FieldError show={hasError} message={errorMsg} />
       </div>
-    </>
+    </LabelFieldPair>
   );
 };
 
@@ -557,6 +782,8 @@ const collectNames = (fc) => getFieldWatchNames(fc);
  * Deep-ish equality for a single watched form value.
  * Primitives use ===; option objects compare code + rent/multiplier metadata
  * so enriched dropdown selections don't spuriously re-render.
+ * Arrays / fieldArray rows compare nested values — otherwise `String([row])`
+ * collapses every row to "[object Object]" and subtype dependsOn never refreshes.
  *
  * @param {*} a
  * @param {*} b
@@ -564,10 +791,20 @@ const collectNames = (fc) => getFieldWatchNames(fc);
  */
 const watchValueEqual = (a, b) => {
   if (a === b) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((item, i) => watchValueEqual(item, b[i]));
+  }
   if (a && b && typeof a === "object" && typeof b === "object") {
-    if (optionCode(a) !== optionCode(b)) return false;
-    const metaKeys = ["multiplier", "rentMultiplier", "cycleMultiplier", "rentLabelKey"];
-    return metaKeys.every((key) => (a[key] ?? null) === (b[key] ?? null));
+    // Dropdown / radio option shape
+    if ("code" in a || "code" in b) {
+      if (optionCode(a) !== optionCode(b)) return false;
+      const metaKeys = ["multiplier", "rentMultiplier", "cycleMultiplier", "rentLabelKey"];
+      return metaKeys.every((key) => (a[key] ?? null) === (b[key] ?? null));
+    }
+    // fieldArray row (or other plain object): compare own keys
+    const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+    return [...keys].every((k) => watchValueEqual(a[k], b[k]));
   }
   return false;
 };
@@ -594,16 +831,28 @@ const areEqual = (prev, next) => {
     prev.isFieldSearching !== next.isFieldSearching ||
     prev.searchPanel !== next.searchPanel ||
     prev.onSelectSearchResult !== next.onSelectSearchResult ||
-    prev.onCreateNewFromSearch !== next.onCreateNewFromSearch
+    prev.onCreateNewFromSearch !== next.onCreateNewFromSearch ||
+    prev.enrichFieldArrayRow !== next.enrichFieldArrayRow ||
+    prev.inputName !== next.inputName
   ) {
     return false;
   }
   const names = collectNames(next.fieldConfig);
-  return names.every(
-    (n) =>
-      watchValueEqual(prev.formData[n], next.formData[n]) &&
-      prev.errors[n] === next.errors[n]
+  const valuesEqual = names.every((n) =>
+    watchValueEqual(prev.formData[n], next.formData[n])
   );
+  if (!valuesEqual) return false;
+
+  if (next.fieldConfig?.type === "fieldArray") {
+    const arrayName = getFieldArrayName(next.fieldConfig);
+    const prefix = `${arrayName}.`;
+    const prevKeys = Object.keys(prev.errors || {}).filter((k) => k.startsWith(prefix));
+    const nextKeys = Object.keys(next.errors || {}).filter((k) => k.startsWith(prefix));
+    if (prevKeys.length !== nextKeys.length) return false;
+    return nextKeys.every((k) => prev.errors[k] === next.errors[k]);
+  }
+
+  return names.every((n) => prev.errors[n] === next.errors[n]);
 };
 
 export default React.memo(DynamicFormField, areEqual);
