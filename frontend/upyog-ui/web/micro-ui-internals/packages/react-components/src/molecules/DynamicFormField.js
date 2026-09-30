@@ -743,6 +743,83 @@ const DynamicFormField = ({
             </button>
           </div>
           <FieldError show={hasError} message={errorMsg} />
+
+          {panelForField?.status === "matches" && Array.isArray(panelForField.matches) && (
+            <div className="dynamic-form-field__suggest-box">
+              {panelForField.matches.map((match) => (
+                <button
+                  key={match.estateNo}
+                  type="button"
+                  className="dynamic-form-field__suggest-item"
+                  onClick={() => onSelectSearchResult?.(name, match)}
+                >
+                  <span className="dynamic-form-field__suggest-no">
+                    {match.label || match.estateNo}
+                  </span>
+                  {match.subtitle ? (
+                    <span className="dynamic-form-field__suggest-sub">
+                      {match.subtitle}
+                    </span>
+                  ) : null}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {panelForField?.status === "found" && (
+            <div className="dynamic-form-field__result-card">
+              <div className="dynamic-form-field__result-row">
+                <span>{t(field.resultLabel || labelKey || "CS_COMMON_ASSET_NUMBER")}</span>
+                <span>{panelForField.estateNo}</span>
+              </div>
+              {panelForField.prefill?.buildingName && (
+                <div className="dynamic-form-field__result-row">
+                  <span>{t("EST_BUILDING_NAME")}</span>
+                  <span>{t(panelForField.prefill.buildingName)}</span>
+                </div>
+              )}
+              {panelForField.prefill?.assetType && (
+                <div className="dynamic-form-field__result-row">
+                  <span>{t("EST_ASSET_TYPE")}</span>
+                  <span>{t(panelForField.prefill.assetType)}</span>
+                </div>
+              )}
+              {panelForField.prefill?.serviceType && (
+                <div className="dynamic-form-field__result-row">
+                  <span>{t("EST_LOCALITY")}</span>
+                  <span>{t(panelForField.prefill.serviceType)}</span>
+                </div>
+              )}
+              {panelForField.prefill?.city && (
+                <div className="dynamic-form-field__result-row">
+                  <span>{t("EST_CITY")}</span>
+                  <span>{t(panelForField.prefill.city)}</span>
+                </div>
+              )}
+              <button
+                type="button"
+                className="dynamic-form-field__select-button"
+                onClick={() => onSelectSearchResult?.(name)}
+              >
+                {t(field.selectLabel || "CS_COMMON_SELECT")}
+              </button>
+            </div>
+          )}
+
+          {panelForField?.status === "notFound" && (
+            <div className="dynamic-form-field__not-found">
+              <p className="dynamic-form-field__not-found-text">
+                {t(field.notFoundLabel || "CS_COMMON_NOT_FOUND")}
+              </p>
+              <button
+                type="button"
+                className="dynamic-form-field__create-button"
+                onClick={() => onCreateNewFromSearch?.(name)}
+              >
+                {t(field.createNewLabel || "CS_COMMON_CREATE_NEW")}
+              </button>
+            </div>
+          )}
         </div>
       </LabelFieldPair>
     );
