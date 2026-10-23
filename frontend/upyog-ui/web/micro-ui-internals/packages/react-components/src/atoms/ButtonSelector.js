@@ -13,14 +13,20 @@ const ButtonSelector = (props) => {
   }
   return (
     <button
-      className={props.isDisabled ? "selector-button-primary-disabled" : theme}
+      className={[
+        // Extra class lets accordion continue buttons add layout without a new theme.
+        props.isDisabled ? "selector-button-primary-disabled" : theme,
+        props.className,
+      ]
+        .filter(Boolean)
+        .join(" ")}
       type={props.type || "submit"}
       form={props.formId}
       onClick={props.onSubmit}
       disabled={props.isDisabled}
       style={props.style ? props.style : null}
     >
-      <h2 style={{ ...props?.textStyles, ...{ width: "100%" } }}>{props.label}</h2>
+      <h2 className="width-full" style={props?.textStyles}>{props.label}</h2>
     </button>
   );
 };
